@@ -22,13 +22,17 @@ RECENT_WINDOW = 600  # seconds — label email as "Update" if notified within th
 
 GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
 GEMINI_SYSTEM = (
-    "You summarize GitHub activity for someone who does not write code. "
-    "Write 2-4 plain English sentences. Follow this structure:\n"
-    "1. What was added or changed (be specific — name the actual file, feature, or topic).\n"
-    "2. What it does or what it is about (explain it like you would to a curious friend).\n"
-    "3. Why it might matter or be interesting (optional, only if obvious from the content).\n"
-    "Rules: no jargon (no 'commit', 'branch', 'diff', 'PR', 'repo', 'merge', 'push'). "
-    "Use the actual content — titles, descriptions, filenames — not generic phrases like 'files were updated'."
+    "You explain GitHub activity to someone who does not write code. "
+    "Your goal is zero information loss — cover everything meaningful in the change. "
+    "Write as much as needed. Use plain paragraphs (no bullet points, no headers). "
+    "Follow this flow naturally:\n"
+    "- Start with exactly what was added or changed, naming it specifically.\n"
+    "- Explain what it is or what it does, in plain language a curious non-technical person would appreciate.\n"
+    "- Include any key details, examples, or context from the content itself that help understand it fully.\n"
+    "- End with why it might matter or who it is useful for, if that is clear from the content.\n"
+    "Rules: no jargon (never say 'commit', 'branch', 'diff', 'PR', 'repo', 'merge', 'push', 'codebase'). "
+    "Never say 'the files were updated' or anything equally vague. "
+    "Be specific — use the actual titles, descriptions, and details from the content provided."
 )
 
 
@@ -85,8 +89,8 @@ def fetch_commit_diff(repo_full, sha, token=""):
         )
         if resp.status_code == 200:
             diff = resp.text
-            if len(diff) > 4000:
-                diff = diff[:4000] + "\n... (diff truncated)"
+            if len(diff) > 12000:
+                diff = diff[:12000] + "\n... (diff truncated)"
             return diff
         print(f"  Diff HTTP {resp.status_code}: {repo_full}/{sha[:7]}")
     except requests.RequestException as exc:
@@ -128,7 +132,7 @@ def build_ai_prompt(evt, diff=""):
 
     if etype == "PullRequestEvent":
         pr     = payload.get("pull_request", {})
-        body   = (pr.get("body") or "")[:1500]
+        body   = (pr.get("body") or "")[:4000]
         return (
             f"Project: {repo}\n"
             f"Action:  {payload.get('action','')}\n"
@@ -140,7 +144,7 @@ def build_ai_prompt(evt, diff=""):
 
     if etype == "IssuesEvent":
         issue = payload.get("issue", {})
-        body  = (issue.get("body") or "")[:1500]
+        body  = (issue.get("body") or "")[:4000]
         return (
             f"Project: {repo}\n"
             f"Action:  {payload.get('action','')}\n"
@@ -154,12 +158,12 @@ def build_ai_prompt(evt, diff=""):
         return (
             f"Project: {repo}\n"
             f"Issue:   {issue.get('title','')}\n"
-            f"Comment: {(comment.get('body') or '')[:1500]}"
+            f"Comment: {(comment.get('body') or '')[:4000]}"
         )
 
     if etype == "ReleaseEvent":
         release = payload.get("release", {})
-        notes   = (release.get("body") or "")[:1500]
+        notes   = (release.get("body") or "")[:4000]
         return (
             f"Project: {repo}\n"
             f"Version: {release.get('tag_name','')}\n"
@@ -174,7 +178,7 @@ def build_ai_prompt(evt, diff=""):
             f"Project: {repo}\n"
             f"PR:      {pr.get('title','')}\n"
             f"Review state: {review.get('state','')}\n"
-            f"Review body:  {(review.get('body') or '')[:1000]}"
+            f"Review body:  {(review.get('body') or '')[:4000]}"
         )
 
     # WatchEvent, ForkEvent, CreateEvent, DeleteEvent, MemberEvent, etc.
@@ -193,7 +197,7 @@ def call_gemini(prompt, api_key):
                     "parts": [{"text": f"{GEMINI_SYSTEM}\n\n{prompt}"}],
                 }],
                 "generationConfig": {
-                    "maxOutputTokens": 400,
+                    "maxOutputTokens": 1024,
                     "temperature": 0.4,
                     "thinkingConfig": {"thinkingBudget": 0},
                 },

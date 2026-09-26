@@ -53,7 +53,7 @@ def test_specific_commit(repo_full, sha, gemini_key, github_token=""):
     for f in files:
         diff_parts.append(f"--- {f['filename']} (+{f['additions']} -{f['deletions']})")
         if f.get("patch"):
-            diff_parts.append(f['patch'][:1500])
+            diff_parts.append(f['patch'][:5000])
     diff = "\n".join(diff_parts)
 
     fake_evt = {
