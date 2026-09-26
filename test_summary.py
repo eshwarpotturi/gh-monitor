@@ -24,7 +24,7 @@ from monitor import (
     load_json, CONFIG_FILE, GITHUB_API,
     target_to_url, fetch_events,
     describe_event, event_url,
-    fetch_commit_diff, build_ai_prompt, call_gemini,
+    fetch_commit_details, build_ai_prompt, call_gemini,
     get_ai_summary,
     build_body, send_email,
 )

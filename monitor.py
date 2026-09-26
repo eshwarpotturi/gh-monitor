@@ -77,9 +77,13 @@ def target_to_url(raw):
     print(f"  Unrecognised target: {raw!r} — skipping.")
     return None, None
 
-def fetch_commit_diff(repo_full, sha, token=""):
-    """Fetch the unified diff for a single commit. Returns truncated diff string."""
-    headers = {"Accept": "application/vnd.github.v3.diff"}
+def fetch_commit_details(repo_full, sha, token=""):
+    """
+    Fetch a commit via the JSON API and return a structured string showing
+    each file changed and its actual patch (code diff). This gives Gemini
+    real content to summarise instead of a raw unified diff blob.
+    """
+    headers = {"Accept": "application/vnd.github.v3+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
@@ -88,13 +92,22 @@ def fetch_commit_diff(repo_full, sha, token=""):
             headers=headers, timeout=15
         )
         if resp.status_code == 200:
-            diff = resp.text
-            if len(diff) > 12000:
-                diff = diff[:12000] + "\n... (diff truncated)"
-            return diff
-        print(f"  Diff HTTP {resp.status_code}: {repo_full}/{sha[:7]}")
+            data   = resp.json()
+            parts  = []
+            for f in data.get("files", []):
+                parts.append(f"--- {f.get('filename','')} (+{f.get('additions',0)} -{f.get('deletions',0)})")
+                patch = f.get("patch", "")
+                if patch:
+                    if len(patch) > 5000:
+                        patch = patch[:5000] + "\n... (file patch truncated)"
+                    parts.append(patch)
+            result = "\n\n".join(parts)
+            if len(result) > 15000:
+                result = result[:15000] + "\n... (truncated)"
+            return result
+        print(f"  Commit HTTP {resp.status_code}: {repo_full}/{sha[:7]}")
     except requests.RequestException as exc:
-        print(f"  Diff fetch error: {exc}")
+        print(f"  Commit fetch error: {exc}")
     return ""
 
 
@@ -223,7 +236,7 @@ def call_gemini(prompt, api_key):
 def get_ai_summary(evt, models_token, api_token=""):
     """
     Entry point for AI summarisation.
-    Fetches commit diff for PushEvents, builds prompt, calls Gemini.
+    Fetches actual file changes for PushEvents, builds prompt, calls Gemini.
     Returns "" if AI is skipped or fails — caller uses rule-based fallback.
     """
     if not models_token:
@@ -233,10 +246,17 @@ def get_ai_summary(evt, models_token, api_token=""):
     if evt.get("type") == "PushEvent":
         repo_full = evt.get("repo", {}).get("name", "")
         commits   = evt.get("payload", {}).get("commits", [])
-        if commits:
-            sha  = commits[-1].get("sha", "")
-            # api_token is a GitHub token — never pass the Gemini key here
-            diff = fetch_commit_diff(repo_full, sha, api_token)
+        # Fetch actual file changes for up to 3 commits (most recent first)
+        diff_parts = []
+        for c in reversed(commits[:3]):
+            sha = c.get("sha", "")
+            if not sha:
+                continue
+            msg = c.get("message", "").splitlines()[0]
+            details = fetch_commit_details(repo_full, sha, api_token)
+            if details:
+                diff_parts.append(f"=== Change: \"{msg}\" ===\n{details}")
+        diff = "\n\n".join(diff_parts)
 
     prompt = build_ai_prompt(evt, diff)
     if not prompt:
