@@ -107,17 +107,20 @@ def build_ai_prompt(evt, diff=""):
     if etype == "PushEvent":
         branch  = payload.get("ref", "").replace("refs/heads/", "")
         commits = payload.get("commits", [])
-        bullets = "\n".join(
-            f"{i}. {c.get('message','').splitlines()[0]}"
-            for i, c in enumerate(commits[:5], 1)
-        )
+        count   = payload.get("size", len(commits))
+        messages = [c.get("message", "").splitlines()[0] for c in commits[:5] if c.get("message")]
+        if messages:
+            bullets = "\n".join(f"{i}. {m}" for i, m in enumerate(messages, 1))
+        else:
+            bullets = f"({count} commit(s) — messages not available in event payload)"
         parts = [
             f"Project: {repo}",
             f"Branch:  {branch}",
-            f"Changes:\n{bullets}",
+            f"Number of commits: {count}",
+            f"Commit messages:\n{bullets}",
         ]
         if diff:
-            parts.append(f"\nActual diff:\n{diff}")
+            parts.append(f"\nActual code diff:\n{diff}")
         return "\n".join(parts)
 
     if etype == "PullRequestEvent":
@@ -213,7 +216,7 @@ def call_gemini(prompt, api_key):
 def get_ai_summary(evt, models_token, api_token=""):
     """
     Entry point for AI summarisation.
-    Fetches commit diff for PushEvents, builds prompt, calls Models API.
+    Fetches commit diff for PushEvents, builds prompt, calls Gemini.
     Returns "" if AI is skipped or fails — caller uses rule-based fallback.
     """
     if not models_token:
@@ -225,7 +228,8 @@ def get_ai_summary(evt, models_token, api_token=""):
         commits   = evt.get("payload", {}).get("commits", [])
         if commits:
             sha  = commits[-1].get("sha", "")
-            diff = fetch_commit_diff(repo_full, sha, api_token or models_token)
+            # api_token is a GitHub token — never pass the Gemini key here
+            diff = fetch_commit_diff(repo_full, sha, api_token)
 
     prompt = build_ai_prompt(evt, diff)
     if not prompt:
