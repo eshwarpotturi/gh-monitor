@@ -19,6 +19,7 @@ CONFIG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config
 STATE_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 GITHUB_API    = "https://api.github.com"
 RECENT_WINDOW = 600  # seconds — label email as "Update" if notified within this window
+MAX_SEEN_IDS  = 1000 # event IDs remembered; must exceed targets × 30 (one events page each)
 
 GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
 GEMINI_SYSTEM = (
@@ -52,6 +53,7 @@ def save_json(path, data):
 # ── GitHub API ────────────────────────────────────────────────────────────────
 
 def fetch_events(url, token=None):
+    """Returns the event list, or None if the request failed (distinct from an empty feed)."""
     headers = {"Accept": "application/vnd.github.v3+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -62,7 +64,7 @@ def fetch_events(url, token=None):
         print(f"  HTTP {resp.status_code}: {url}")
     except requests.RequestException as exc:
         print(f"  Request error: {exc}")
-    return []
+    return None
 
 def target_to_url(raw):
     t = raw.strip().rstrip("/")
@@ -92,23 +94,74 @@ def fetch_commit_details(repo_full, sha, token=""):
             headers=headers, timeout=15
         )
         if resp.status_code == 200:
-            data   = resp.json()
-            parts  = []
-            for f in data.get("files", []):
-                parts.append(f"--- {f.get('filename','')} (+{f.get('additions',0)} -{f.get('deletions',0)})")
-                patch = f.get("patch", "")
-                if patch:
-                    if len(patch) > 5000:
-                        patch = patch[:5000] + "\n... (file patch truncated)"
-                    parts.append(patch)
-            result = "\n\n".join(parts)
-            if len(result) > 15000:
-                result = result[:15000] + "\n... (truncated)"
-            return result
+            return format_files(resp.json().get("files", []))
         print(f"  Commit HTTP {resp.status_code}: {repo_full}/{sha[:7]}")
     except requests.RequestException as exc:
         print(f"  Commit fetch error: {exc}")
     return ""
+
+def format_files(files):
+    """Turn a GitHub API 'files' list into a per-file patch string for Gemini."""
+    parts = []
+    for f in files:
+        parts.append(f"--- {f.get('filename','')} (+{f.get('additions',0)} -{f.get('deletions',0)})")
+        patch = f.get("patch", "")
+        if patch:
+            if len(patch) > 5000:
+                patch = patch[:5000] + "\n... (file patch truncated)"
+            parts.append(patch)
+    result = "\n\n".join(parts)
+    if len(result) > 15000:
+        result = result[:15000] + "\n... (truncated)"
+    return result
+
+def is_null_sha(sha):
+    return not sha or set(sha) == {"0"}
+
+def enrich_push_event(evt, token=""):
+    """
+    GitHub's Events API no longer includes commits/size in PushEvent payloads —
+    only before/head. Fill them back in with a single Compare API call, which
+    returns every commit message and every changed file for the push.
+    Sets payload["commits"], payload["size"], evt["_diff"] and evt["_url"].
+    """
+    if evt.get("type") != "PushEvent":
+        return
+    repo_full = evt.get("repo", {}).get("name", "")
+    payload   = evt.setdefault("payload", {})
+    before    = payload.get("before", "")
+    head      = payload.get("head", "")
+    if not head or "_url" in evt:
+        return
+
+    base = f"https://github.com/{repo_full}"
+    evt["_url"] = f"{base}/commit/{head}"
+
+    if not is_null_sha(before):
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            resp = requests.get(
+                f"{GITHUB_API}/repos/{repo_full}/compare/{before}...{head}",
+                headers=headers, timeout=15
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                payload["commits"] = [
+                    {"sha": c.get("sha", ""), "message": c.get("commit", {}).get("message", "")}
+                    for c in data.get("commits", [])
+                ]
+                payload["size"] = data.get("total_commits", len(payload["commits"]))
+                evt["_diff"]    = format_files(data.get("files", []))
+                evt["_url"]     = f"{base}/compare/{before[:12]}...{head[:12]}"
+                return
+            print(f"  Compare HTTP {resp.status_code}: {repo_full} {before[:7]}...{head[:7]}")
+        except requests.RequestException as exc:
+            print(f"  Compare fetch error: {exc}")
+
+    # New branch (before is all zeros) or compare failed — fall back to head commit only
+    evt["_diff"] = fetch_commit_details(repo_full, head, token)
 
 
 # ── AI Summaries (Gemini) ─────────────────────────────────────────────────────
@@ -128,7 +181,7 @@ def build_ai_prompt(evt, diff=""):
         branch  = payload.get("ref", "").replace("refs/heads/", "")
         commits = payload.get("commits", [])
         count   = payload.get("size", len(commits))
-        messages = [c.get("message", "").splitlines()[0] for c in commits[:5] if c.get("message")]
+        messages = [c.get("message", "").splitlines()[0] for c in commits[:20] if c.get("message")]
         if messages:
             bullets = "\n".join(f"{i}. {m}" for i, m in enumerate(messages, 1))
         else:
@@ -198,14 +251,24 @@ def build_ai_prompt(evt, diff=""):
     return ""
 
 
+def retry_delay(resp, attempt):
+    """Seconds to wait before retrying: Retry-After header if sent, else linear backoff."""
+    try:
+        return min(60, max(1, int(resp.headers.get("Retry-After", ""))))
+    except (AttributeError, ValueError):
+        return (attempt + 1) * 10
+
+
 def call_gemini(prompt, api_key):
-    """POST to Gemini API with retry on 429/503. Returns summary string or ""."""
+    """POST to Gemini API, retrying on 429/5xx and network errors. Returns summary string or ""."""
     max_retries = 3
     for attempt in range(max_retries):
+        last_try = attempt == max_retries - 1
         try:
             resp = requests.post(
-                f"{GEMINI_API}?key={api_key}",
-                headers={"Content-Type": "application/json"},
+                GEMINI_API,
+                # Key goes in a header so it never appears in exception messages / logs
+                headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
                 json={
                     "contents": [{
                         "role": "user",
@@ -218,25 +281,34 @@ def call_gemini(prompt, api_key):
                 },
                 timeout=30,
             )
-            if resp.status_code == 200:
-                data       = resp.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        return parts[0].get("text", "").strip()
-                    finish = candidates[0].get("finishReason", "unknown")
-                    print(f"  Gemini no text — finishReason: {finish}")
+        except requests.RequestException as exc:
+            if last_try:
+                print(f"  Gemini error: {exc}")
                 return ""
-            elif resp.status_code in (429, 503) and attempt < max_retries - 1:
-                wait = (attempt + 1) * 10
-                print(f"  Gemini {resp.status_code} — retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(wait)
-                continue
-            else:
-                print(f"  Gemini {resp.status_code}: {resp.text[:120]}")
-        except Exception as exc:
-            print(f"  Gemini error: {exc}")
+            wait = retry_delay(None, attempt)
+            print(f"  Gemini error: {exc} — retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+            time.sleep(wait)
+            continue
+
+        if resp.status_code == 200:
+            try:
+                candidates = resp.json().get("candidates", [])
+            except ValueError:
+                print("  Gemini returned non-JSON response")
+                return ""
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts:
+                    return parts[0].get("text", "").strip()
+                finish = candidates[0].get("finishReason", "unknown")
+                print(f"  Gemini no text — finishReason: {finish}")
+            return ""
+        if resp.status_code in (429, 500, 502, 503, 504) and not last_try:
+            wait = retry_delay(resp, attempt)
+            print(f"  Gemini {resp.status_code} — retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+            time.sleep(wait)
+            continue
+        print(f"  Gemini {resp.status_code}: {resp.text[:120]}")
         return ""
     return ""
 
@@ -250,36 +322,8 @@ def get_ai_summary(evt, models_token, api_token=""):
     if not models_token:
         return ""
 
-    diff = ""
-    if evt.get("type") == "PushEvent":
-        repo_full = evt.get("repo", {}).get("name", "")
-        payload   = evt.get("payload", {})
-        commits   = payload.get("commits", [])
-
-        # Build list of SHAs to fetch details for
-        shas_to_fetch = []
-        for c in commits[:3]:
-            sha = c.get("sha", "")
-            msg = c.get("message", "").splitlines()[0] if c.get("message") else ""
-            if sha:
-                shas_to_fetch.append((sha, msg))
-
-        # If commits array is empty, fall back to payload.head
-        if not shas_to_fetch:
-            head_sha = payload.get("head", "")
-            if head_sha:
-                shas_to_fetch.append((head_sha, ""))
-
-        # Fetch actual file changes for each commit
-        diff_parts = []
-        for sha, msg in shas_to_fetch:
-            details = fetch_commit_details(repo_full, sha, api_token)
-            if details:
-                label = f"=== Change: \"{msg}\" ===\n" if msg else ""
-                diff_parts.append(f"{label}{details}")
-        diff = "\n\n".join(diff_parts)
-
-    prompt = build_ai_prompt(evt, diff)
+    enrich_push_event(evt, api_token)  # no-op if already enriched or not a push
+    prompt = build_ai_prompt(evt, evt.get("_diff", ""))
     if not prompt:
         return ""
 
@@ -315,12 +359,13 @@ def describe_event(evt):
     if etype == "PushEvent":
         commits = payload.get("commits", [])
         count   = payload.get("size", len(commits))
-        bullets = [f'  • "{c.get("message","").splitlines()[0]}"' for c in commits[:5]]
+        bullets = [f'  • "{c.get("message","").splitlines()[0]}"' for c in commits[:5] if c.get("message")]
         if count > 5:
             bullets.append(f"  … and {count - 5} more change(s)")
+        what = f"{count} new change(s)" if count else "new changes"
         return {
             "label":    "Code Update",
-            "headline": f'@{actor} pushed {count} new change(s) to the "{branch()}" branch of "{repo}".',
+            "headline": f'@{actor} pushed {what} to the "{branch()}" branch of "{repo}".',
             "details":  bullets,
             "meaning":  "New code was added or modified in this project.",
         }
@@ -491,6 +536,8 @@ def event_url(evt):
     repo    = evt.get("repo", {}).get("name", "")
     base    = f"https://github.com/{repo}"
     etype   = evt.get("type", "")
+    if evt.get("_url"):
+        return evt["_url"]
     try:
         if etype == "PushEvent":
             commits = payload.get("commits", [])
@@ -597,11 +644,12 @@ def main():
     cfg   = load_json(CONFIG_FILE, {})
     state = load_json(STATE_FILE,  {"seen_ids": [], "last_notif_ts": None})
 
-    seen_ids      = set(state.get("seen_ids", []))
+    # Ordered oldest → newest so trimming drops the oldest IDs, not arbitrary ones
+    seen_list     = list(state.get("seen_ids", []))
+    seen_ids      = set(seen_list)
     last_notif_ts = state.get("last_notif_ts")
     token         = os.environ.get("GH_TOKEN", "")
     models_token  = os.environ.get("GEMINI_API_KEY", "")
-    is_first_run  = len(seen_ids) == 0
 
     # Targets can come from MONITOR_TARGETS env var (comma-separated) or config.json
     env_targets = os.environ.get("MONITOR_TARGETS", "")
@@ -617,36 +665,53 @@ def main():
         print("No valid targets found. Set MONITOR_TARGETS env var or edit config.json.")
         raise SystemExit(1)
 
+    # Priming is tracked per target so adding a new one later doesn't flood the inbox
+    # with its backlog. Older state files have no primed_targets: if they already have
+    # seen IDs, treat every current target as primed.
+    if "primed_targets" in state:
+        primed = set(state["primed_targets"])
+    else:
+        primed = set(targets) if seen_ids else set()
+
     target_label = ", ".join(targets.keys())
     print(f"Monitoring    : {target_label}")
     print(f"Known IDs     : {len(seen_ids)}")
-    print(f"First run     : {is_first_run}")
+    print(f"Priming       : {', '.join(t for t in targets if t not in primed) or 'none'}")
     print(f"AI summaries  : {'yes (Gemini)' if models_token else 'no (GEMINI_API_KEY not set)'}")
 
     new_events = []
 
     for label, url in targets.items():
-        for evt in fetch_events(url, token):
+        events = fetch_events(url, token)
+        if events is None:
+            continue  # don't mark a target primed off a failed fetch
+        priming = label not in primed
+        fresh   = 0
+        for evt in events:
             eid = evt.get("id")
-            if not eid:
+            if not eid or eid in seen_ids:
                 continue
-            if eid not in seen_ids:
-                seen_ids.add(eid)
-                if not is_first_run:
-                    print(f"  New event: {evt.get('type')} in {evt.get('repo',{}).get('name','')}")
-                    ai_summary = get_ai_summary(evt, models_token, api_token=token)
-                    new_events.append({
-                        "id":         eid,
-                        "time":       evt.get("created_at", "?"),
-                        "repo":       evt.get("repo", {}).get("name", label),
-                        "described":  describe_event(evt),
-                        "ai_summary": ai_summary,
-                        "url":        event_url(evt),
-                    })
+            seen_ids.add(eid)
+            seen_list.append(eid)
+            fresh += 1
+            if priming:
+                continue
+            print(f"  New event: {evt.get('type')} in {evt.get('repo',{}).get('name','')}")
+            enrich_push_event(evt, token)
+            ai_summary = get_ai_summary(evt, models_token, api_token=token)
+            new_events.append({
+                "id":         eid,
+                "time":       evt.get("created_at", "?"),
+                "repo":       evt.get("repo", {}).get("name", label),
+                "described":  describe_event(evt),
+                "ai_summary": ai_summary,
+                "url":        event_url(evt),
+            })
+        if priming:
+            primed.add(label)
+            print(f"Primed {label} with {fresh} existing event ID(s). No email for these.")
 
-    if is_first_run:
-        print(f"Primed with {len(seen_ids)} existing event IDs. No email sent on first run.")
-    elif new_events:
+    if new_events:
         new_events.sort(key=lambda x: x["time"])
         within_window = last_notif_ts and (time.time() - last_notif_ts < RECENT_WINDOW)
         subject = (
@@ -661,8 +726,9 @@ def main():
     else:
         print("No new events.")
 
-    state["seen_ids"]      = list(seen_ids)[-600:]
-    state["last_notif_ts"] = last_notif_ts
+    state["seen_ids"]       = seen_list[-MAX_SEEN_IDS:]
+    state["primed_targets"] = sorted(primed)
+    state["last_notif_ts"]  = last_notif_ts
     save_json(STATE_FILE, state)
 
 

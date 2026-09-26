@@ -36,7 +36,7 @@ Sent: 26 Sep 2026, 1:00 PM UTC
   What this means:  A new article titled "Dark Mode Support" has been added
                     to the website. It introduces a toggle that switches the
                     colour scheme from light to dark ...
-  View on GitHub:   https://github.com/octocat/hello-world/commit/abc1234
+  View on GitHub:   https://github.com/octocat/hello-world/compare/a1b2c3d4e5f6...abc1234def56
 
 ─────────────────────────────────────────────────────────────────
 [2 of 2]  Pull Request  ·  octocat/tools  ·  26 Sep 2026, 1:00 PM UTC

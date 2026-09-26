@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from monitor import (
     load_json, CONFIG_FILE, GITHUB_API,
     target_to_url, fetch_events,
-    describe_event, event_url,
+    describe_event, event_url, enrich_push_event,
     fetch_commit_details, build_ai_prompt, call_gemini,
     get_ai_summary,
     build_body, send_email,
@@ -112,7 +112,7 @@ def main():
 
     all_raw = []
     for label, url in targets.items():
-        all_raw.extend(fetch_events(url, token))
+        all_raw.extend(fetch_events(url, token) or [])
 
     all_raw.sort(key=lambda e: e.get("created_at", ""), reverse=True)
     recent = all_raw[:count]
@@ -128,6 +128,7 @@ def main():
         repo  = evt.get("repo", {}).get("name", "")
         print(f"  Summarising: {etype} in {repo} ...")
 
+        enrich_push_event(evt, token)
         ai_summary = get_ai_summary(evt, models_token, api_token=token)
         if ai_summary:
             print(f"    → {ai_summary[:100]}...")

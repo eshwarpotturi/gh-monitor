@@ -5,6 +5,12 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+# Serialise runs: GitHub often fires delayed cron runs back-to-back, and two
+# overlapping runs would read the same state.json and send the same email twice.
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
