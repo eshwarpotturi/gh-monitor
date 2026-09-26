@@ -188,11 +188,19 @@ def call_gemini(prompt, api_key):
                 }],
                 "generationConfig": {"maxOutputTokens": 80, "temperature": 0.3},
             },
-            timeout=20,
+            timeout=30,
         )
         if resp.status_code == 200:
-            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        print(f"  Gemini {resp.status_code}: {resp.text[:120]}")
+            data       = resp.json()
+            candidates = data.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts:
+                    return parts[0].get("text", "").strip()
+                finish = candidates[0].get("finishReason", "unknown")
+                print(f"  Gemini no text — finishReason: {finish}")
+        else:
+            print(f"  Gemini {resp.status_code}: {resp.text[:120]}")
     except Exception as exc:
         print(f"  Gemini error: {exc}")
     return ""
