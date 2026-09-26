@@ -1,0 +1,29 @@
+name: Test Summary (End-to-End)
+
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: 'Number of recent events to summarise and email'
+        required: false
+        default: '2'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run end-to-end test
+        env:
+          GH_TOKEN:            ${{ secrets.GH_TOKEN }}
+          EMAIL_PASSWORD:      ${{ secrets.EMAIL_PASSWORD }}
+          GITHUB_MODELS_TOKEN: ${{ github.token }}
+        run: python test_summary.py ${{ github.event.inputs.count }}

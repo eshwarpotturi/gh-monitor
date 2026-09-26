@@ -20,6 +20,15 @@ STATE_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.
 GITHUB_API    = "https://api.github.com"
 RECENT_WINDOW = 600  # seconds — label email as "Update" if notified within this window
 
+GITHUB_MODELS_API    = "https://models.inference.ai.azure.com/chat/completions"
+GITHUB_MODELS_MODEL  = "gpt-4o-mini"
+GITHUB_MODELS_SYSTEM = (
+    "You are a plain-English assistant summarizing GitHub activity for a non-technical reader. "
+    "Write exactly one sentence (under 35 words) explaining what this specific change means in practical terms. "
+    "Be concrete and specific — use the actual content provided. "
+    "Never use jargon like PR, diff, commit, branch, repo, merge, or push."
+)
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -62,20 +71,176 @@ def target_to_url(raw):
     print(f"  Unrecognised target: {raw!r} — skipping.")
     return None, None
 
+def fetch_commit_diff(repo_full, sha, token=""):
+    """Fetch the unified diff for a single commit. Returns truncated diff string."""
+    headers = {"Accept": "application/vnd.github.v3.diff"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = requests.get(
+            f"{GITHUB_API}/repos/{repo_full}/commits/{sha}",
+            headers=headers, timeout=15
+        )
+        if resp.status_code == 200:
+            diff = resp.text
+            if len(diff) > 4000:
+                diff = diff[:4000] + "\n... (diff truncated)"
+            return diff
+        print(f"  Diff HTTP {resp.status_code}: {repo_full}/{sha[:7]}")
+    except requests.RequestException as exc:
+        print(f"  Diff fetch error: {exc}")
+    return ""
+
+
+# ── AI Summaries (GitHub Models) ──────────────────────────────────────────────
+
+def build_ai_prompt(evt, diff=""):
+    """
+    Build the user-message string for the Models API.
+    Returns "" for event types where AI adds no value (WatchEvent, ForkEvent, etc.).
+    Pure function — no network calls.
+    """
+    etype   = evt.get("type", "")
+    actor   = evt.get("actor", {}).get("login", "?")
+    repo    = evt.get("repo",  {}).get("name",  "?").split("/")[-1]
+    payload = evt.get("payload", {})
+
+    if etype == "PushEvent":
+        branch  = payload.get("ref", "").replace("refs/heads/", "")
+        commits = payload.get("commits", [])
+        bullets = "\n".join(
+            f"{i}. {c.get('message','').splitlines()[0]}"
+            for i, c in enumerate(commits[:5], 1)
+        )
+        parts = [
+            f"Project: {repo}",
+            f"Branch:  {branch}",
+            f"Changes:\n{bullets}",
+        ]
+        if diff:
+            parts.append(f"\nActual diff:\n{diff}")
+        return "\n".join(parts)
+
+    if etype == "PullRequestEvent":
+        pr     = payload.get("pull_request", {})
+        body   = (pr.get("body") or "")[:1500]
+        return (
+            f"Project: {repo}\n"
+            f"Action:  {payload.get('action','')}\n"
+            f"Title:   {pr.get('title','')}\n"
+            f"Description: {body}\n"
+            f"Files changed: {pr.get('changed_files',0)}, "
+            f"+{pr.get('additions',0)} / -{pr.get('deletions',0)} lines"
+        )
+
+    if etype == "IssuesEvent":
+        issue = payload.get("issue", {})
+        body  = (issue.get("body") or "")[:1500]
+        return (
+            f"Project: {repo}\n"
+            f"Action:  {payload.get('action','')}\n"
+            f"Title:   {issue.get('title','')}\n"
+            f"Description: {body}"
+        )
+
+    if etype == "IssueCommentEvent":
+        issue   = payload.get("issue", {})
+        comment = payload.get("comment", {})
+        return (
+            f"Project: {repo}\n"
+            f"Issue:   {issue.get('title','')}\n"
+            f"Comment: {(comment.get('body') or '')[:1500]}"
+        )
+
+    if etype == "ReleaseEvent":
+        release = payload.get("release", {})
+        notes   = (release.get("body") or "")[:1500]
+        return (
+            f"Project: {repo}\n"
+            f"Version: {release.get('tag_name','')}\n"
+            f"Name:    {release.get('name','')}\n"
+            f"Notes:   {notes}"
+        )
+
+    if etype == "PullRequestReviewEvent":
+        pr     = payload.get("pull_request", {})
+        review = payload.get("review", {})
+        return (
+            f"Project: {repo}\n"
+            f"PR:      {pr.get('title','')}\n"
+            f"Review state: {review.get('state','')}\n"
+            f"Review body:  {(review.get('body') or '')[:1000]}"
+        )
+
+    # WatchEvent, ForkEvent, CreateEvent, DeleteEvent, MemberEvent, etc.
+    return ""
+
+
+def call_github_models(prompt, token):
+    """POST to GitHub Models API. Returns summary string or "" on any failure."""
+    try:
+        resp = requests.post(
+            GITHUB_MODELS_API,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": GITHUB_MODELS_MODEL,
+                "messages": [
+                    {"role": "system", "content": GITHUB_MODELS_SYSTEM},
+                    {"role": "user",   "content": prompt},
+                ],
+                "temperature": 0.3,
+                "max_tokens":  80,
+            },
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        print(f"  GitHub Models {resp.status_code}: {resp.text[:120]}")
+    except Exception as exc:
+        print(f"  GitHub Models error: {exc}")
+    return ""
+
+
+def get_ai_summary(evt, models_token, api_token=""):
+    """
+    Entry point for AI summarisation.
+    Fetches commit diff for PushEvents, builds prompt, calls Models API.
+    Returns "" if AI is skipped or fails — caller uses rule-based fallback.
+    """
+    if not models_token:
+        return ""
+
+    diff = ""
+    if evt.get("type") == "PushEvent":
+        repo_full = evt.get("repo", {}).get("name", "")
+        commits   = evt.get("payload", {}).get("commits", [])
+        if commits:
+            sha  = commits[-1].get("sha", "")
+            diff = fetch_commit_diff(repo_full, sha, api_token or models_token)
+
+    prompt = build_ai_prompt(evt, diff)
+    if not prompt:
+        return ""
+
+    return call_github_models(prompt, models_token)
+
 
 # ── Plain-English event descriptions ─────────────────────────────────────────
 
 def describe_event(evt):
     """
-    Returns a dict with:
-      label       — short category name (e.g. "Code Update")
-      headline    — one sentence saying what happened, in plain English
-      details     — list of bullet-point strings with specifics
-      meaning     — one sentence explaining what this type of event means
+    Returns a dict:
+      label    — short category  (e.g. "Code Update")
+      headline — one sentence saying what happened
+      details  — list of bullet strings with specifics
+      meaning  — fallback meaning used when AI is unavailable
     """
     etype   = evt.get("type", "")
     actor   = evt.get("actor", {}).get("login", "?")
-    repo    = evt.get("repo",  {}).get("name",  "?").split("/")[-1]  # just repo name, not owner/repo
+    repo    = evt.get("repo",  {}).get("name",  "?").split("/")[-1]
     payload = evt.get("payload", {})
 
     def branch():
@@ -83,7 +248,7 @@ def describe_event(evt):
 
     def pr():
         p = payload.get("pull_request", {})
-        return p.get("title", "untitled"), p.get("number", "?"), p.get("state", "")
+        return p.get("title", "untitled"), p.get("number", "?")
 
     def issue():
         i = payload.get("issue", {})
@@ -99,11 +264,11 @@ def describe_event(evt):
             "label":    "Code Update",
             "headline": f'@{actor} pushed {count} new change(s) to the "{branch()}" branch of "{repo}".',
             "details":  bullets,
-            "meaning":  "New code was added or modified in this project — could be a bug fix, new feature, or other improvement.",
+            "meaning":  "New code was added or modified in this project.",
         }
 
     if etype == "PullRequestEvent":
-        title, num, _ = pr()
+        title, num = pr()
         action = payload.get("action", "?")
         merged = payload.get("pull_request", {}).get("merged", False)
         if action == "closed" and merged:
@@ -111,13 +276,10 @@ def describe_event(evt):
             meaning = "The proposed changes were approved and are now a permanent part of the project."
         elif action == "closed":
             verb    = "closed without merging"
-            meaning = "The proposal was rejected or withdrawn — those changes will not be applied."
-        elif action == "opened":
-            verb    = "opened"
-            meaning = "A pull request is a proposal to add changes. It is under review and not live yet."
+            meaning = "The proposal was rejected or withdrawn."
         else:
             verb    = action
-            meaning = "A pull request is a proposal to add changes to a project."
+            meaning = "A pull request is a proposal to add changes — it's under review and not live yet."
         return {
             "label":    "Pull Request",
             "headline": f'@{actor} {verb} a pull request in "{repo}".',
@@ -126,38 +288,38 @@ def describe_event(evt):
         }
 
     if etype == "PullRequestReviewEvent":
-        title, num, _ = pr()
-        state   = payload.get("review", {}).get("state", "?")
-        state_readable = {"approved": "approved", "changes_requested": "requested changes on", "commented": "commented on"}.get(state, state)
+        title, num = pr()
+        state = payload.get("review", {}).get("state", "?")
+        readable = {"approved": "approved", "changes_requested": "requested changes on", "commented": "commented on"}.get(state, state)
         return {
             "label":    "Code Review",
-            "headline": f'@{actor} {state_readable} a pull request in "{repo}".',
+            "headline": f'@{actor} {readable} a pull request in "{repo}".',
             "details":  [f'  Pull request: "{title}"  (PR #{num})'],
-            "meaning":  "A code review is when someone examines proposed changes and gives feedback before they are merged.",
+            "meaning":  "A code review is when someone examines proposed changes and gives feedback.",
         }
 
     if etype == "PullRequestReviewCommentEvent":
-        title, num, _ = pr()
+        title, num = pr()
         return {
             "label":    "Review Comment",
             "headline": f'@{actor} left a comment during code review in "{repo}".',
             "details":  [f'  Pull request: "{title}"  (PR #{num})'],
-            "meaning":  "A line-by-line comment on proposed code changes, usually asking a question or suggesting an improvement.",
+            "meaning":  "A line-by-line comment on proposed code changes.",
         }
 
     if etype == "IssuesEvent":
         title, num = issue()
         action = payload.get("action", "?")
         meanings = {
-            "opened": "An issue is used to report bugs, request features, or track tasks. This one is now open for discussion.",
-            "closed": "This issue has been resolved — the bug was fixed, the feature was added, or it was decided no action is needed.",
-            "reopened": "This issue was previously closed but has been reopened — the problem may have come back or wasn't fully resolved.",
+            "opened":   "An issue is used to report bugs or request features — this one is now open for discussion.",
+            "closed":   "This issue has been resolved.",
+            "reopened": "This issue was previously closed but has been reopened.",
         }
         return {
-            "label":    "Issue " + action.capitalize(),
+            "label":    f"Issue {action.capitalize()}",
             "headline": f'@{actor} {action} an issue in "{repo}".',
             "details":  [f'  Title: "{title}"  (Issue #{num})'],
-            "meaning":  meanings.get(action, "Issues are used to track bugs, feature requests, and tasks."),
+            "meaning":  meanings.get(action, "Issues are used to track bugs and feature requests."),
         }
 
     if etype == "IssueCommentEvent":
@@ -166,7 +328,7 @@ def describe_event(evt):
             "label":    "Issue Comment",
             "headline": f'@{actor} commented on an issue in "{repo}".',
             "details":  [f'  Issue: "{title}"  (Issue #{num})'],
-            "meaning":  "Someone replied to an ongoing discussion about a bug, feature, or task.",
+            "meaning":  "Someone replied to an ongoing discussion about a bug or feature.",
         }
 
     if etype == "CreateEvent":
@@ -174,14 +336,14 @@ def describe_event(evt):
         ref      = payload.get("ref") or payload.get("master_branch", "?")
         meanings = {
             "repository": "A new project has been created on GitHub.",
-            "branch":     "A branch is a separate workspace — developers use them to work on a feature or fix without affecting the main code.",
-            "tag":        "A tag marks a specific point in the project's history, often used to label a version like v1.0.",
+            "branch":     "A branch is a separate workspace for working on a feature or fix.",
+            "tag":        "A tag marks a specific version in the project's history.",
         }
         return {
             "label":    f"New {ref_type.capitalize()} Created",
             "headline": f'@{actor} created a new {ref_type} called "{ref}" in "{repo}".',
             "details":  [],
-            "meaning":  meanings.get(ref_type, f"A new {ref_type} was created in this project."),
+            "meaning":  meanings.get(ref_type, f"A new {ref_type} was created."),
         }
 
     if etype == "DeleteEvent":
@@ -191,7 +353,7 @@ def describe_event(evt):
             "label":    f"{ref_type.capitalize()} Deleted",
             "headline": f'@{actor} deleted the {ref_type} "{ref}" in "{repo}".',
             "details":  [],
-            "meaning":  f"A {ref_type} that is no longer needed was removed from the project.",
+            "meaning":  f"A {ref_type} that is no longer needed was removed.",
         }
 
     if etype == "WatchEvent":
@@ -199,7 +361,7 @@ def describe_event(evt):
             "label":    "Star",
             "headline": f'@{actor} starred the "{repo}" project.',
             "details":  [],
-            "meaning":  'Starring is like bookmarking — it means someone finds the project interesting or useful.',
+            "meaning":  'Starring is like bookmarking — it means someone finds the project interesting.',
         }
 
     if etype == "ForkEvent":
@@ -208,7 +370,7 @@ def describe_event(evt):
             "label":    "Fork",
             "headline": f'@{actor} made a personal copy (fork) of "{repo}".',
             "details":  [f"  Their copy: {fork_name}"],
-            "meaning":  "Forking creates an independent copy of a project. People do this to experiment, customise, or contribute changes back.",
+            "meaning":  "Forking creates an independent copy of a project to experiment with or contribute to.",
         }
 
     if etype == "ReleaseEvent":
@@ -220,7 +382,7 @@ def describe_event(evt):
             "label":    "New Release",
             "headline": f'@{actor} {action} a new release of "{repo}": version {tag}.',
             "details":  [f'  Release name: "{name}"'] if name else [],
-            "meaning":  "A release is an official, versioned snapshot of the project — like shipping a new version of an app.",
+            "meaning":  "A release is an official, versioned snapshot of the project.",
         }
 
     if etype == "CommitCommentEvent":
@@ -228,7 +390,7 @@ def describe_event(evt):
             "label":    "Commit Comment",
             "headline": f'@{actor} commented on a specific code change in "{repo}".',
             "details":  [],
-            "meaning":  "A comment left directly on a line of code that was previously committed.",
+            "meaning":  "A comment left directly on a previously submitted line of code.",
         }
 
     if etype == "GollumEvent":
@@ -247,7 +409,7 @@ def describe_event(evt):
             "label":    "Collaborator Change",
             "headline": f'@{actor} {action} @{member} as a collaborator on "{repo}".',
             "details":  [],
-            "meaning":  "Collaborators are people who have been granted permission to contribute directly to a project.",
+            "meaning":  "Someone was added or removed as a contributor to this project.",
         }
 
     if etype == "PublicEvent":
@@ -258,7 +420,6 @@ def describe_event(evt):
             "meaning":  "This project was previously private and is now open for anyone to view.",
         }
 
-    # Fallback for unknown event types
     return {
         "label":    etype.replace("Event", ""),
         "headline": f'@{actor} performed an action in "{repo}".',
@@ -312,7 +473,7 @@ def build_body(events, target_label, last_notif_ts=None):
         mins = max(1, int((time.time() - last_notif_ts) / 60))
         header = (
             f"You have {total} new update(s) from {target_label} on GitHub.\n"
-            f"(These are changes since your last alert {mins} minute(s) ago.)\n"
+            f"(Changes since your last alert {mins} minute(s) ago.)\n"
             f"Sent: {now_str}"
         )
     else:
@@ -324,18 +485,24 @@ def build_body(events, target_label, last_notif_ts=None):
     lines = [header, ""]
 
     for i, evt in enumerate(events, 1):
-        d = evt["described"]
+        d       = evt["described"]
+        # AI summary replaces the generic fallback meaning when available
+        meaning = evt.get("ai_summary") or d["meaning"]
+
         lines.append(divider)
         lines.append(f"[{i} of {total}]  {d['label']}  ·  {evt['repo']}  ·  {fmt_time(evt['time'])}")
         lines.append("")
         lines.append(d["headline"])
+
         if d["details"]:
             lines.append("")
             for bullet in d["details"]:
                 lines.append(bullet)
-        if d["meaning"]:
+
+        if meaning:
             lines.append("")
-            lines.append(f"  What this means:  {d['meaning']}")
+            lines.append(f"  What this means:  {meaning}")
+
         lines.append(f"  View on GitHub:   {evt['url']}")
         lines.append("")
 
@@ -375,6 +542,7 @@ def main():
     seen_ids      = set(state.get("seen_ids", []))
     last_notif_ts = state.get("last_notif_ts")
     token         = os.environ.get("GH_TOKEN", "")
+    models_token  = os.environ.get("GITHUB_MODELS_TOKEN", "")
     is_first_run  = len(seen_ids) == 0
 
     targets = {}
@@ -388,9 +556,10 @@ def main():
         raise SystemExit(1)
 
     target_label = ", ".join(targets.keys())
-    print(f"Monitoring  : {target_label}")
-    print(f"Known IDs   : {len(seen_ids)}")
-    print(f"First run   : {is_first_run}")
+    print(f"Monitoring    : {target_label}")
+    print(f"Known IDs     : {len(seen_ids)}")
+    print(f"First run     : {is_first_run}")
+    print(f"AI summaries  : {'yes' if models_token else 'no (GITHUB_MODELS_TOKEN not set)'}")
 
     new_events = []
 
@@ -402,11 +571,14 @@ def main():
             if eid not in seen_ids:
                 seen_ids.add(eid)
                 if not is_first_run:
+                    print(f"  New event: {evt.get('type')} in {evt.get('repo',{}).get('name','')}")
+                    ai_summary = get_ai_summary(evt, models_token, api_token=token)
                     new_events.append({
                         "id":         eid,
                         "time":       evt.get("created_at", "?"),
                         "repo":       evt.get("repo", {}).get("name", label),
                         "described":  describe_event(evt),
+                        "ai_summary": ai_summary,
                         "url":        event_url(evt),
                     })
 
@@ -422,7 +594,7 @@ def main():
         )
         body = build_body(new_events, target_label, last_notif_ts if within_window else None)
         send_email(subject, body)
-        print(f"Email sent  : {len(new_events)} event(s)")
+        print(f"Email sent    : {len(new_events)} event(s)")
         last_notif_ts = time.time()
     else:
         print("No new events.")

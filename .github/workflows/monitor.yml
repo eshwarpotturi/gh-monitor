@@ -2,19 +2,16 @@ name: GitHub Monitor
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # every 5 minutes (GitHub Actions minimum)
-  workflow_dispatch:          # lets you trigger it manually from the Actions tab
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Restore state.json from the previous run (seen event IDs + last notification time).
-      # A new cache entry is saved each run using run_number; restore-keys finds the latest one.
       - name: Restore state
         uses: actions/cache@v4
         with:
@@ -33,6 +30,7 @@ jobs:
 
       - name: Run monitor
         env:
-          GH_TOKEN:       ${{ secrets.GH_TOKEN }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          GH_TOKEN:            ${{ secrets.GH_TOKEN }}
+          EMAIL_PASSWORD:      ${{ secrets.EMAIL_PASSWORD }}
+          GITHUB_MODELS_TOKEN: ${{ github.token }}
         run: python monitor.py
