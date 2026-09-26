@@ -29,7 +29,7 @@ def main():
     count        = int(sys.argv[1]) if len(sys.argv) > 1 else 2
     cfg          = load_json(CONFIG_FILE, {})
     token        = os.environ.get("GH_TOKEN", "")
-    models_token = os.environ.get("GITHUB_MODELS_TOKEN", "")
+    models_token = os.environ.get("GEMINI_API_KEY", "")
 
     targets = {}
     for raw in cfg.get("targets", []):
@@ -43,7 +43,7 @@ def main():
 
     target_label = ", ".join(targets.keys())
     print(f"Fetching last {count} event(s) from: {target_label}")
-    print(f"AI summaries: {'yes' if models_token else 'NO — GITHUB_MODELS_TOKEN not set'}")
+    print(f"AI summaries: {'yes (Gemini)' if models_token else 'NO — GEMINI_API_KEY not set'}")
 
     # Collect all recent events across all targets
     all_raw = []

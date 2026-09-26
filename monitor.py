@@ -20,9 +20,8 @@ STATE_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.
 GITHUB_API    = "https://api.github.com"
 RECENT_WINDOW = 600  # seconds — label email as "Update" if notified within this window
 
-GITHUB_MODELS_API    = "https://models.inference.ai.azure.com/chat/completions"
-GITHUB_MODELS_MODEL  = "gpt-4o-mini"
-GITHUB_MODELS_SYSTEM = (
+GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+GEMINI_SYSTEM = (
     "You are a plain-English assistant summarizing GitHub activity for a non-technical reader. "
     "Write exactly one sentence (under 35 words) explaining what this specific change means in practical terms. "
     "Be concrete and specific — use the actual content provided. "
@@ -176,31 +175,26 @@ def build_ai_prompt(evt, diff=""):
     return ""
 
 
-def call_github_models(prompt, token):
-    """POST to GitHub Models API. Returns summary string or "" on any failure."""
+def call_gemini(prompt, api_key):
+    """POST to Gemini API. Returns summary string or "" on any failure."""
     try:
         resp = requests.post(
-            GITHUB_MODELS_API,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
+            f"{GEMINI_API}?key={api_key}",
+            headers={"Content-Type": "application/json"},
             json={
-                "model": GITHUB_MODELS_MODEL,
-                "messages": [
-                    {"role": "system", "content": GITHUB_MODELS_SYSTEM},
-                    {"role": "user",   "content": prompt},
-                ],
-                "temperature": 0.3,
-                "max_tokens":  80,
+                "contents": [{
+                    "role": "user",
+                    "parts": [{"text": f"{GEMINI_SYSTEM}\n\n{prompt}"}],
+                }],
+                "generationConfig": {"maxOutputTokens": 80, "temperature": 0.3},
             },
             timeout=20,
         )
         if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        print(f"  GitHub Models {resp.status_code}: {resp.text[:120]}")
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        print(f"  Gemini {resp.status_code}: {resp.text[:120]}")
     except Exception as exc:
-        print(f"  GitHub Models error: {exc}")
+        print(f"  Gemini error: {exc}")
     return ""
 
 
@@ -225,7 +219,7 @@ def get_ai_summary(evt, models_token, api_token=""):
     if not prompt:
         return ""
 
-    return call_github_models(prompt, models_token)
+    return call_gemini(prompt, models_token)
 
 
 # ── Plain-English event descriptions ─────────────────────────────────────────
@@ -542,7 +536,7 @@ def main():
     seen_ids      = set(state.get("seen_ids", []))
     last_notif_ts = state.get("last_notif_ts")
     token         = os.environ.get("GH_TOKEN", "")
-    models_token  = os.environ.get("GITHUB_MODELS_TOKEN", "")
+    models_token  = os.environ.get("GEMINI_API_KEY", "")
     is_first_run  = len(seen_ids) == 0
 
     targets = {}
@@ -559,7 +553,7 @@ def main():
     print(f"Monitoring    : {target_label}")
     print(f"Known IDs     : {len(seen_ids)}")
     print(f"First run     : {is_first_run}")
-    print(f"AI summaries  : {'yes' if models_token else 'no (GITHUB_MODELS_TOKEN not set)'}")
+    print(f"AI summaries  : {'yes (Gemini)' if models_token else 'no (GEMINI_API_KEY not set)'}")
 
     new_events = []
 

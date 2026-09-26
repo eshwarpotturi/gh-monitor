@@ -23,7 +23,7 @@ jobs:
 
       - name: Run end-to-end test
         env:
-          GH_TOKEN:            ${{ secrets.GH_TOKEN }}
-          EMAIL_PASSWORD:      ${{ secrets.EMAIL_PASSWORD }}
-          GITHUB_MODELS_TOKEN: ${{ github.token }}
+          GH_TOKEN:       ${{ secrets.GH_TOKEN }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python test_summary.py ${{ github.event.inputs.count }}
