@@ -1,7 +1,7 @@
 {
   "targets": [
-    "sanand0"
+    "some-username"
   ],
-  "email_from": "sai.eshwar2000@gmail.com",
-  "email_to":   "sai.eshwar2000@gmail.com"
+  "email_from": "your.email@gmail.com",
+  "email_to":   "your.email@gmail.com"
 }

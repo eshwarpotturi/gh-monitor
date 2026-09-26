@@ -30,7 +30,10 @@ jobs:
 
       - name: Run monitor
         env:
-          GH_TOKEN:       ${{ secrets.GH_TOKEN }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN:         ${{ secrets.GH_TOKEN }}
+          EMAIL_FROM:       ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:         ${{ secrets.EMAIL_TO }}
+          EMAIL_PASSWORD:   ${{ secrets.EMAIL_PASSWORD }}
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          MONITOR_TARGETS:  ${{ secrets.MONITOR_TARGETS }}
         run: python monitor.py

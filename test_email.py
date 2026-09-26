@@ -16,35 +16,35 @@ email_password = os.environ.get("EMAIL_PASSWORD", "")
 smtp_server    = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
 smtp_port      = int(os.environ.get("SMTP_PORT", "465"))
 
-subject = "[GitHub Alert] New activity from sanand0  (TEST)"
+subject = "[GitHub Alert] New activity from octocat  (TEST)"
 
 body = """\
-You have 2 new update(s) from sanand0 on GitHub.
+You have 2 new update(s) from octocat on GitHub.
 Sent: 26 Sep 2026, 1:00 PM UTC
 
 ─────────────────────────────────────────────────────────────────
-[1 of 2]  Code Update  ·  sanand0/some-repo  ·  26 Sep 2026, 12:58 PM UTC
+[1 of 2]  Code Update  ·  octocat/hello-world  ·  26 Sep 2026, 12:58 PM UTC
 
-@sanand0 pushed 2 new change(s) to the "main" branch of "some-repo".
+@octocat pushed 2 new change(s) to the "main" branch of "hello-world".
 
   • "Add dark mode support to homepage"
   • "Fix CSS alignment on mobile"
 
   What this means:  New code was added or modified in this project — could be a bug fix, new feature, or other improvement.
-  View on GitHub:   https://github.com/sanand0/some-repo/commit/abc1234
+  View on GitHub:   https://github.com/octocat/hello-world/commit/abc1234
 
 ─────────────────────────────────────────────────────────────────
-[2 of 2]  Pull Request  ·  sanand0/tools  ·  26 Sep 2026, 1:00 PM UTC
+[2 of 2]  Pull Request  ·  octocat/tools  ·  26 Sep 2026, 1:00 PM UTC
 
-@sanand0 opened a pull request in "tools".
+@octocat opened a pull request in "tools".
 
   Title: "Fix pagination bug on search results"  (PR #42)
 
   What this means:  A pull request is a proposal to add changes. It is under review and not live yet.
-  View on GitHub:   https://github.com/sanand0/tools/pull/42
+  View on GitHub:   https://github.com/octocat/tools/pull/42
 
 ─────────────────────────────────────────────────────────────────
-Monitoring: sanand0  |  Sent by gh-monitor
+Monitoring: octocat  |  Sent by gh-monitor
 
 This is a TEST email. If you received this, alerts are working correctly.
 """

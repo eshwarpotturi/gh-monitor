@@ -93,14 +93,17 @@ def main():
     # Mode: last N events
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2
 
+    env_targets = os.environ.get("MONITOR_TARGETS", "")
+    raw_targets = [t.strip() for t in env_targets.split(",") if t.strip()] if env_targets else cfg.get("targets", [])
+
     targets = {}
-    for raw in cfg.get("targets", []):
+    for raw in raw_targets:
         url, label = target_to_url(raw)
         if url:
             targets[label] = url
 
     if not targets:
-        print("No targets in config.json.")
+        print("No valid targets found. Set MONITOR_TARGETS env var or edit config.json.")
         raise SystemExit(1)
 
     target_label = ", ".join(targets.keys())

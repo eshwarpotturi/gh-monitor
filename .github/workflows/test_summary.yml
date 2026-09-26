@@ -8,7 +8,7 @@ on:
         required: false
         default: '2'
       commit_repo:
-        description: 'owner/repo for a specific commit test (e.g. sanand0/blog)'
+        description: 'owner/repo for a specific commit test (e.g. octocat/hello-world)'
         required: false
         default: ''
       commit_sha:
@@ -31,9 +31,12 @@ jobs:
 
       - name: Run test
         env:
-          GH_TOKEN:       ${{ secrets.GH_TOKEN }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN:         ${{ secrets.GH_TOKEN }}
+          EMAIL_FROM:       ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:         ${{ secrets.EMAIL_TO }}
+          EMAIL_PASSWORD:   ${{ secrets.EMAIL_PASSWORD }}
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          MONITOR_TARGETS:  ${{ secrets.MONITOR_TARGETS }}
         run: |
           if [ -n "${{ github.event.inputs.commit_sha }}" ]; then
             python test_summary.py --commit "${{ github.event.inputs.commit_repo }}" "${{ github.event.inputs.commit_sha }}"
