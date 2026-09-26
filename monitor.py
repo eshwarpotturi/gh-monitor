@@ -20,7 +20,7 @@ STATE_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.
 GITHUB_API    = "https://api.github.com"
 RECENT_WINDOW = 600  # seconds — label email as "Update" if notified within this window
 
-GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 GEMINI_SYSTEM = (
     "You are a plain-English assistant summarizing GitHub activity for a non-technical reader. "
     "Write exactly one sentence (under 35 words) explaining what this specific change means in practical terms. "
