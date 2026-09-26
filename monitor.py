@@ -111,7 +111,7 @@ def fetch_commit_details(repo_full, sha, token=""):
     return ""
 
 
-# ── AI Summaries (GitHub Models) ──────────────────────────────────────────────
+# ── AI Summaries (Gemini) ─────────────────────────────────────────────────────
 
 def build_ai_prompt(evt, diff=""):
     """
@@ -270,19 +270,14 @@ def get_ai_summary(evt, models_token, api_token=""):
             head_sha = payload.get("head", "")
             if head_sha:
                 shas_to_fetch.append((head_sha, ""))
-                print(f"    Commits array empty — using head SHA: {head_sha[:7]}")
 
         # Fetch actual file changes for each commit
         diff_parts = []
         for sha, msg in shas_to_fetch:
-            print(f"    Fetching {repo_full}@{sha[:7]} ...")
             details = fetch_commit_details(repo_full, sha, api_token)
             if details:
                 label = f"=== Change: \"{msg}\" ===\n" if msg else ""
                 diff_parts.append(f"{label}{details}")
-                print(f"    Got {len(details)} chars of file changes")
-            else:
-                print(f"    No details returned")
         diff = "\n\n".join(diff_parts)
 
     prompt = build_ai_prompt(evt, diff)
