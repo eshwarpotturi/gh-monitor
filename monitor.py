@@ -199,37 +199,46 @@ def build_ai_prompt(evt, diff=""):
 
 
 def call_gemini(prompt, api_key):
-    """POST to Gemini API. Returns summary string or "" on any failure."""
-    try:
-        resp = requests.post(
-            f"{GEMINI_API}?key={api_key}",
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": [{
-                    "role": "user",
-                    "parts": [{"text": f"{GEMINI_SYSTEM}\n\n{prompt}"}],
-                }],
-                "generationConfig": {
-                    "maxOutputTokens": 1024,
-                    "temperature": 0.4,
-                    "thinkingConfig": {"thinkingBudget": 0},
+    """POST to Gemini API with retry on 429/503. Returns summary string or ""."""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                f"{GEMINI_API}?key={api_key}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{
+                        "role": "user",
+                        "parts": [{"text": f"{GEMINI_SYSTEM}\n\n{prompt}"}],
+                    }],
+                    "generationConfig": {
+                        "maxOutputTokens": 1024,
+                        "temperature": 0.4,
+                        "thinkingConfig": {"thinkingBudget": 0},
+                    },
                 },
-            },
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            data       = resp.json()
-            candidates = data.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts:
-                    return parts[0].get("text", "").strip()
-                finish = candidates[0].get("finishReason", "unknown")
-                print(f"  Gemini no text — finishReason: {finish}")
-        else:
-            print(f"  Gemini {resp.status_code}: {resp.text[:120]}")
-    except Exception as exc:
-        print(f"  Gemini error: {exc}")
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                data       = resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "").strip()
+                    finish = candidates[0].get("finishReason", "unknown")
+                    print(f"  Gemini no text — finishReason: {finish}")
+                return ""
+            elif resp.status_code in (429, 503) and attempt < max_retries - 1:
+                wait = (attempt + 1) * 10
+                print(f"  Gemini {resp.status_code} — retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+                continue
+            else:
+                print(f"  Gemini {resp.status_code}: {resp.text[:120]}")
+        except Exception as exc:
+            print(f"  Gemini error: {exc}")
+        return ""
     return ""
 
 
