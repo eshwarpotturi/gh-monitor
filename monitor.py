@@ -245,22 +245,36 @@ def get_ai_summary(evt, models_token, api_token=""):
     diff = ""
     if evt.get("type") == "PushEvent":
         repo_full = evt.get("repo", {}).get("name", "")
-        commits   = evt.get("payload", {}).get("commits", [])
-        print(f"    Commits in event: {len(commits)}")
-        # Fetch actual file changes for up to 3 commits (most recent first)
-        diff_parts = []
-        for c in reversed(commits[:3]):
+        payload   = evt.get("payload", {})
+        commits   = payload.get("commits", [])
+
+        # Build list of SHAs to fetch details for
+        shas_to_fetch = []
+        for c in commits[:3]:
             sha = c.get("sha", "")
-            msg = c.get("message", "").splitlines()[0] if c.get("message") else "(no message)"
-            print(f"    Fetching {repo_full}@{sha[:7]}: \"{msg}\"")
-            if not sha:
-                continue
+            msg = c.get("message", "").splitlines()[0] if c.get("message") else ""
+            if sha:
+                shas_to_fetch.append((sha, msg))
+
+        # If commits array is empty, fall back to payload.head
+        if not shas_to_fetch:
+            head_sha = payload.get("head", "")
+            if head_sha:
+                shas_to_fetch.append((head_sha, ""))
+                print(f"    Commits array empty — using head SHA: {head_sha[:7]}")
+
+        # Fetch actual file changes for each commit
+        diff_parts = []
+        for sha, msg in shas_to_fetch:
+            print(f"    Fetching {repo_full}@{sha[:7]} ...")
             details = fetch_commit_details(repo_full, sha, api_token)
-            print(f"    Details length: {len(details)} chars")
             if details:
-                diff_parts.append(f"=== Change: \"{msg}\" ===\n{details}")
+                label = f"=== Change: \"{msg}\" ===\n" if msg else ""
+                diff_parts.append(f"{label}{details}")
+                print(f"    Got {len(details)} chars of file changes")
+            else:
+                print(f"    No details returned")
         diff = "\n\n".join(diff_parts)
-        print(f"    Total diff: {len(diff)} chars")
 
     prompt = build_ai_prompt(evt, diff)
     if not prompt:
