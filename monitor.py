@@ -20,7 +20,7 @@ STATE_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.
 GITHUB_API    = "https://api.github.com"
 RECENT_WINDOW = 600  # seconds — label email as "Update" if notified within this window
 
-GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
 GEMINI_SYSTEM = (
     "You explain GitHub activity to someone who does not write code. "
     "Your goal is zero information loss — cover everything meaningful in the change. "
@@ -214,7 +214,6 @@ def call_gemini(prompt, api_key):
                     "generationConfig": {
                         "maxOutputTokens": 1024,
                         "temperature": 0.4,
-                        "thinkingConfig": {"thinkingBudget": 0},
                     },
                 },
                 timeout=30,
