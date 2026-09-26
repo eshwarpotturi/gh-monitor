@@ -22,10 +22,13 @@ RECENT_WINDOW = 600  # seconds — label email as "Update" if notified within th
 
 GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
 GEMINI_SYSTEM = (
-    "You are a plain-English assistant summarizing GitHub activity for a non-technical reader. "
-    "Write exactly one sentence (under 35 words) explaining what this specific change means in practical terms. "
-    "Be concrete and specific — use the actual content provided. "
-    "Never use jargon like PR, diff, commit, branch, repo, merge, or push."
+    "You summarize GitHub activity for someone who does not write code. "
+    "Write 2-4 plain English sentences. Follow this structure:\n"
+    "1. What was added or changed (be specific — name the actual file, feature, or topic).\n"
+    "2. What it does or what it is about (explain it like you would to a curious friend).\n"
+    "3. Why it might matter or be interesting (optional, only if obvious from the content).\n"
+    "Rules: no jargon (no 'commit', 'branch', 'diff', 'PR', 'repo', 'merge', 'push'). "
+    "Use the actual content — titles, descriptions, filenames — not generic phrases like 'files were updated'."
 )
 
 
@@ -190,8 +193,8 @@ def call_gemini(prompt, api_key):
                     "parts": [{"text": f"{GEMINI_SYSTEM}\n\n{prompt}"}],
                 }],
                 "generationConfig": {
-                    "maxOutputTokens": 200,
-                    "temperature": 0.3,
+                    "maxOutputTokens": 400,
+                    "temperature": 0.4,
                     "thinkingConfig": {"thinkingBudget": 0},
                 },
             },

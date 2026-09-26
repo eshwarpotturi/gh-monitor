@@ -4,9 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       count:
-        description: 'Number of recent events to summarise and email'
+        description: 'Number of recent events to summarise (ignored if commit_sha is set)'
         required: false
         default: '2'
+      commit_repo:
+        description: 'owner/repo for a specific commit test (e.g. sanand0/blog)'
+        required: false
+        default: ''
+      commit_sha:
+        description: 'Full SHA of a specific commit to summarise'
+        required: false
+        default: ''
 
 jobs:
   test:
@@ -21,9 +29,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run end-to-end test
+      - name: Run test
         env:
           GH_TOKEN:       ${{ secrets.GH_TOKEN }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python test_summary.py ${{ github.event.inputs.count }}
+        run: |
+          if [ -n "${{ github.event.inputs.commit_sha }}" ]; then
+            python test_summary.py --commit "${{ github.event.inputs.commit_repo }}" "${{ github.event.inputs.commit_sha }}"
+          else
+            python test_summary.py ${{ github.event.inputs.count }}
+          fi
