@@ -186,7 +186,11 @@ def call_gemini(prompt, api_key):
                     "role": "user",
                     "parts": [{"text": f"{GEMINI_SYSTEM}\n\n{prompt}"}],
                 }],
-                "generationConfig": {"maxOutputTokens": 80, "temperature": 0.3},
+                "generationConfig": {
+                    "maxOutputTokens": 200,
+                    "temperature": 0.3,
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
             },
             timeout=30,
         )
