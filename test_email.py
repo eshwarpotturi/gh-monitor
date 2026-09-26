@@ -20,10 +20,10 @@ subject = "[GitHub Alert] New activity from octocat  (TEST)"
 
 body = """\
 You have 2 new update(s) from octocat on GitHub.
-Sent: 26 Sep 2026, 1:00 PM UTC
+Sent: 26 Sep 2026, 6:30 PM IST
 
 ─────────────────────────────────────────────────────────────────
-[1 of 2]  Code Update  ·  octocat/hello-world  ·  26 Sep 2026, 12:58 PM UTC
+[1 of 2]  Code Update  ·  octocat/hello-world  ·  26 Sep 2026, 6:28 PM IST
 
 @octocat pushed 2 new change(s) to the "main" branch of "hello-world".
 
@@ -34,7 +34,7 @@ Sent: 26 Sep 2026, 1:00 PM UTC
   View on GitHub:   https://github.com/octocat/hello-world/commit/abc1234
 
 ─────────────────────────────────────────────────────────────────
-[2 of 2]  Pull Request  ·  octocat/tools  ·  26 Sep 2026, 1:00 PM UTC
+[2 of 2]  Pull Request  ·  octocat/tools  ·  26 Sep 2026, 6:30 PM IST
 
 @octocat opened a pull request in "tools".
 

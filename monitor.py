@@ -11,7 +11,7 @@ import json
 import time
 import smtplib
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -19,6 +19,7 @@ CONFIG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config
 STATE_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 GITHUB_API    = "https://api.github.com"
 RECENT_WINDOW = 600  # seconds — label email as "Update" if notified within this window
+DISPLAY_TZ    = timezone(timedelta(hours=5, minutes=30), "IST")  # all email times shown in IST
 MAX_SEEN_IDS  = 1000 # event IDs remembered; must exceed targets × 30 (one events page each)
 
 GEMINI_API    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
@@ -565,12 +566,12 @@ def event_url(evt):
 def fmt_time(iso):
     try:
         dt = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        return dt.strftime("%-d %b %Y, %-I:%M %p UTC")
+        return dt.astimezone(DISPLAY_TZ).strftime("%-d %b %Y, %-I:%M %p %Z")
     except Exception:
         return iso
 
 def build_body(events, target_label, last_notif_ts=None):
-    now_str = datetime.now(timezone.utc).strftime("%-d %b %Y, %-I:%M %p UTC")
+    now_str = datetime.now(DISPLAY_TZ).strftime("%-d %b %Y, %-I:%M %p %Z")
     total   = len(events)
     divider = "─" * 65
 
