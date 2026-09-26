@@ -246,17 +246,21 @@ def get_ai_summary(evt, models_token, api_token=""):
     if evt.get("type") == "PushEvent":
         repo_full = evt.get("repo", {}).get("name", "")
         commits   = evt.get("payload", {}).get("commits", [])
+        print(f"    Commits in event: {len(commits)}")
         # Fetch actual file changes for up to 3 commits (most recent first)
         diff_parts = []
         for c in reversed(commits[:3]):
             sha = c.get("sha", "")
+            msg = c.get("message", "").splitlines()[0] if c.get("message") else "(no message)"
+            print(f"    Fetching {repo_full}@{sha[:7]}: \"{msg}\"")
             if not sha:
                 continue
-            msg = c.get("message", "").splitlines()[0]
             details = fetch_commit_details(repo_full, sha, api_token)
+            print(f"    Details length: {len(details)} chars")
             if details:
                 diff_parts.append(f"=== Change: \"{msg}\" ===\n{details}")
         diff = "\n\n".join(diff_parts)
+        print(f"    Total diff: {len(diff)} chars")
 
     prompt = build_ai_prompt(evt, diff)
     if not prompt:
