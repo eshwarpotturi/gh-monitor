@@ -634,9 +634,29 @@ def send_email(subject, body):
     msg["To"]      = email_to
     msg.attach(MIMEText(body, "plain"))
 
-    with smtplib.SMTP_SSL(smtp_server, smtp_port) as s:
-        s.login(email_from, email_password)
-        s.sendmail(email_from, email_to, msg.as_string())
+    # Gmail and other SMTP servers can close an otherwise valid connection
+    # during TLS setup or authentication. Retry those transient failures before
+    # giving up; do not retry sendmail, since delivery may have succeeded even
+    # if the connection drops while the server is replying.
+    smtp = None
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            smtp = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
+            smtp.login(email_from, email_password)
+            break
+        except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError, OSError) as exc:
+            if smtp is not None:
+                smtp.close()
+                smtp = None
+            if attempt == max_attempts - 1:
+                raise
+            wait = (attempt + 1) * 10
+            print(f"  SMTP connection failed: {exc} — retrying in {wait}s (attempt {attempt + 1}/{max_attempts})")
+            time.sleep(wait)
+
+    with smtp:
+        smtp.sendmail(email_from, email_to, msg.as_string())
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
